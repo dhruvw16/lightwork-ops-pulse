@@ -1,382 +1,423 @@
 import streamlit as st
 import pandas as pd
 from datetime import date, datetime, timedelta
-from io import StringIO
 
-st.set_page_config(page_title="LightWork Ops Pulse", page_icon="⚡", layout="wide")
+st.set_page_config(page_title="Ops Pulse", page_icon="⚡", layout="wide")
 
 # -----------------------------
-# Helpers
+# Config
 # -----------------------------
 TEAMS = ["Engineering", "Product", "Commercial", "Operations", "Other"]
 CONFIDENCE_LEVELS = ["High", "Medium", "Low"]
-MANUAL_STATUSES = ["Not started", "In progress", "Completed", "Blocked"]
+STATUSES = ["Not started", "In progress", "Done", "Blocked"]
+PRIORITIES = ["P0", "P1", "P2"]
+
+STATUS_EMOJI = {
+    "Missed": "🔴",
+    "At risk": "🟠",
+    "On track": "🟢",
+    "Done": "✅",
+}
 
 SAMPLE_COMMITMENTS = [
     {
-        "Team": "Engineering",
-        "Owner": "Sarah",
+        "Team": "Engineering", "Owner": "Sarah",
         "Commitment": "Ship PMS integration beta",
         "Deadline": date.today() + timedelta(days=2),
-        "Manual Status": "In progress",
-        "Confidence": "Medium",
-        "Blocked": False,
+        "Status": "In progress", "Confidence": "Medium", "Blocked": False,
         "Last Update Date": date.today() - timedelta(days=6),
-        "Latest Update": "Core API connection works; still resolving webhook reliability.",
-        "Priority": "High",
+        "Latest Update": "Core API connection works; webhook reliability still flaky.",
+        "Priority": "P0",
     },
     {
-        "Team": "Commercial",
-        "Owner": "James",
+        "Team": "Commercial", "Owner": "James",
         "Commitment": "Close Greenfield pilot",
         "Deadline": date.today() + timedelta(days=5),
-        "Manual Status": "In progress",
-        "Confidence": "Low",
-        "Blocked": True,
+        "Status": "In progress", "Confidence": "Low", "Blocked": True,
         "Last Update Date": date.today() - timedelta(days=1),
-        "Latest Update": "Procurement has asked for security documentation before signature.",
-        "Priority": "High",
+        "Latest Update": "Procurement wants security docs before signature.",
+        "Priority": "P0",
     },
     {
-        "Team": "Product",
-        "Owner": "Maya",
+        "Team": "Product", "Owner": "Maya",
         "Commitment": "Release maintenance-notification redesign",
         "Deadline": date.today() - timedelta(days=1),
-        "Manual Status": "In progress",
-        "Confidence": "Medium",
-        "Blocked": False,
+        "Status": "In progress", "Confidence": "Medium", "Blocked": False,
         "Last Update Date": date.today() - timedelta(days=3),
-        "Latest Update": "Design signed off; release missed due to QA queue.",
-        "Priority": "Medium",
+        "Latest Update": "Design signed off; missed release window — stuck in QA.",
+        "Priority": "P1",
     },
     {
-        "Team": "Operations",
-        "Owner": "Alex",
-        "Commitment": "Complete onboarding checklist v1",
+        "Team": "Operations", "Owner": "Alex",
+        "Commitment": "Onboarding checklist v1",
         "Deadline": date.today() + timedelta(days=7),
-        "Manual Status": "Completed",
-        "Confidence": "High",
-        "Blocked": False,
+        "Status": "Done", "Confidence": "High", "Blocked": False,
         "Last Update Date": date.today(),
-        "Latest Update": "Checklist completed and shared with hiring managers.",
-        "Priority": "Medium",
+        "Latest Update": "Done. Shared with hiring managers Monday.",
+        "Priority": "P1",
     },
     {
-        "Team": "Engineering",
-        "Owner": "Priya",
-        "Commitment": "Reduce notification failure rate below 1%",
+        "Team": "Engineering", "Owner": "Priya",
+        "Commitment": "Notification failure rate < 1%",
         "Deadline": date.today() + timedelta(days=12),
-        "Manual Status": "In progress",
-        "Confidence": "High",
-        "Blocked": False,
+        "Status": "In progress", "Confidence": "High", "Blocked": False,
         "Last Update Date": date.today() - timedelta(days=2),
-        "Latest Update": "Retries and alerting added; monitoring results this week.",
-        "Priority": "Medium",
+        "Latest Update": "Retries + alerting live. Watching this week's numbers.",
+        "Priority": "P1",
     },
 ]
 
-
-def normalise_record(record):
-    record = dict(record)
-    if isinstance(record.get("Deadline"), str):
-        record["Deadline"] = datetime.strptime(record["Deadline"], "%Y-%m-%d").date()
-    if isinstance(record.get("Last Update Date"), str):
-        record["Last Update Date"] = datetime.strptime(record["Last Update Date"], "%Y-%m-%d").date()
-    return record
-
-
-def calculate_status(row):
+# -----------------------------
+# Logic
+# -----------------------------
+def calc_status(row):
     today = date.today()
-    deadline = row["Deadline"]
-    last_update = row["Last Update Date"]
-    days_to_deadline = (deadline - today).days
-    days_since_update = (today - last_update).days
-
-    if row["Manual Status"] == "Completed":
-        return "Completed"
-    if deadline < today and row["Manual Status"] != "Completed":
+    days_to_deadline = (row["Deadline"] - today).days
+    days_since_update = (today - row["Last Update Date"]).days
+    if row["Status"] == "Done":
+        return "Done"
+    if row["Deadline"] < today:
         return "Missed"
-    if row["Blocked"] or row["Manual Status"] == "Blocked" or row["Confidence"] == "Low":
+    if row["Blocked"] or row["Status"] == "Blocked" or row["Confidence"] == "Low":
         return "At risk"
     if days_to_deadline <= 3 and days_since_update >= 5:
         return "At risk"
     return "On track"
 
-
 def risk_reason(row):
     today = date.today()
-    deadline = row["Deadline"]
-    last_update = row["Last Update Date"]
-    days_to_deadline = (deadline - today).days
-    days_since_update = (today - last_update).days
-
-    if calculate_status(row) == "Completed":
-        return "Completed"
-    if deadline < today:
-        return f"Deadline passed {abs(days_to_deadline)} day(s) ago"
-    if row["Blocked"] or row["Manual Status"] == "Blocked":
-        return "Marked as blocked"
+    days_to_deadline = (row["Deadline"] - today).days
+    days_since_update = (today - row["Last Update Date"]).days
+    status = calc_status(row)
+    if status == "Done":
+        return ""
+    if row["Deadline"] < today:
+        return f"Deadline slipped {abs(days_to_deadline)}d ago"
+    if row["Blocked"] or row["Status"] == "Blocked":
+        return "Blocked"
     if row["Confidence"] == "Low":
-        return "Owner confidence is low"
+        return "Owner confidence: low"
     if days_to_deadline <= 3 and days_since_update >= 5:
-        return f"Deadline in {days_to_deadline} day(s), no update in {days_since_update} day(s)"
-    return "No immediate risk signal"
-
+        return f"Due in {days_to_deadline}d, no update in {days_since_update}d"
+    return "—"
 
 def needs_attention(row):
     today = date.today()
     days_to_deadline = (row["Deadline"] - today).days
     days_since_update = (today - row["Last Update Date"]).days
     return (
-        calculate_status(row) in ["At risk", "Missed"]
+        calc_status(row) in ["At risk", "Missed"]
         or (0 <= days_to_deadline <= 3 and days_since_update >= 5)
     )
 
-
-def enrich_df(records):
-    rows = [normalise_record(r) for r in records]
-    df = pd.DataFrame(rows)
+def enrich(records):
+    df = pd.DataFrame([dict(r) for r in records])
     if df.empty:
         return df
-    df["Calculated Status"] = df.apply(calculate_status, axis=1)
+    df["Calculated Status"] = df.apply(calc_status, axis=1)
     df["Risk Reason"] = df.apply(risk_reason, axis=1)
     df["Needs Attention"] = df.apply(needs_attention, axis=1)
     df["Days to Deadline"] = df["Deadline"].apply(lambda d: (d - date.today()).days)
     df["Days Since Update"] = df["Last Update Date"].apply(lambda d: (date.today() - d).days)
     return df
 
+def chase_message(row):
+    """Short, founder's-associate Slack DM style — no system-log explanations."""
+    deadline = row["Deadline"].strftime("%a %d %b")
+    if row["Calculated Status"] == "Missed":
+        return (f"Hi {row['Owner']} — '{row['Commitment']}' was due {deadline}. "
+                f"Can you share a revised date and what we need to unblock it? Founder syncs Friday.")
+    if row["Blocked"] or row["Status"] == "Blocked":
+        return (f"Hi {row['Owner']} — '{row['Commitment']}' is flagged blocked. "
+                f"What's the blocker, and who needs to act? Happy to help escalate.")
+    if row["Confidence"] == "Low":
+        return (f"Hi {row['Owner']} — you've marked '{row['Commitment']}' as low confidence. "
+                f"What would move it back to medium? Anything worth flagging to the founder?")
+    return (f"Hi {row['Owner']} — quick check on '{row['Commitment']}', due {deadline}. "
+            f"Any update? Haven't heard since {row['Last Update Date'].strftime('%a %d %b')}.")
 
-def make_follow_up(row):
-    deadline_text = row["Deadline"].strftime("%d %b")
-    return (
-        f"Hi {row['Owner']} — quick check on '{row['Commitment']}', due {deadline_text}. "
-        f"It is currently showing as {row['Calculated Status'].lower()} because: {row['Risk Reason'].lower()}. "
-        "Are we still on track, and is there anything blocking delivery?"
-    )
-
-
-def generate_weekly_summary(df):
+def weekly_brief(df):
+    """Founder-ready brief. Opens with asks, not inventory."""
     if df.empty:
-        return "No commitments logged yet."
+        return "No commitments tracked."
 
-    status_counts = df["Calculated Status"].value_counts().to_dict()
-    completed = status_counts.get("Completed", 0)
-    at_risk = status_counts.get("At risk", 0)
-    missed = status_counts.get("Missed", 0)
-    on_track = status_counts.get("On track", 0)
+    today = date.today()
+    week_end = today + timedelta(days=(4 - today.weekday()) % 7)  # this Friday
+    lines = []
+    lines.append(f"WEEKLY OPS BRIEF — week ending {week_end.strftime('%a %d %b %Y')}")
+    lines.append("")
 
-    summary = []
-    summary.append("Weekly Cross-Functional Summary")
-    summary.append("")
-    summary.append(f"Overall: {completed} completed, {on_track} on track, {at_risk} at risk, {missed} missed.")
-    summary.append("")
+    # 1. Decisions / asks for the founder — the lede
+    missed = df[df["Calculated Status"] == "Missed"].sort_values("Days to Deadline")
+    blocked = df[(df["Calculated Status"] == "At risk") &
+                 ((df["Blocked"]) | (df["Status"] == "Blocked"))]
+    asks = pd.concat([missed, blocked]).drop_duplicates(subset=["Commitment"])
 
-    completed_df = df[df["Calculated Status"] == "Completed"]
-    if not completed_df.empty:
-        summary.append("Completed")
-        for _, row in completed_df.iterrows():
-            summary.append(f"- {row['Team']}: {row['Commitment']} ({row['Owner']})")
-        summary.append("")
+    lines.append("NEEDS YOU")
+    if asks.empty:
+        lines.append("  Nothing requires founder input this week.")
+    else:
+        for _, r in asks.iterrows():
+            lines.append(f"  • {r['Commitment']} ({r['Owner']}, {r['Team']}) — {r['Risk Reason']}")
+    lines.append("")
 
-    risk_df = df[df["Calculated Status"].isin(["At risk", "Missed"])].sort_values("Days to Deadline")
-    if not risk_df.empty:
-        summary.append("At Risk / Missed")
-        for _, row in risk_df.iterrows():
-            summary.append(
-                f"- {row['Team']}: {row['Commitment']} ({row['Owner']}) — {row['Calculated Status']}; {row['Risk Reason']}"
-            )
-        summary.append("")
+    # 2. At risk (not blocked, not missed) — informational
+    soft_risk = df[(df["Calculated Status"] == "At risk") & (~df.index.isin(asks.index))]
+    if not soft_risk.empty:
+        lines.append("WATCHING")
+        for _, r in soft_risk.iterrows():
+            lines.append(f"  • {r['Commitment']} ({r['Owner']}) — {r['Risk Reason']}")
+        lines.append("")
 
-    attention_df = df[df["Needs Attention"]].sort_values("Days to Deadline")
-    if not attention_df.empty:
-        summary.append("Recommended Founder’s Associate Actions")
-        for _, row in attention_df.iterrows():
-            if row["Calculated Status"] == "Missed":
-                action = "confirm revised delivery date and escalation path"
-            elif row["Blocked"] or row["Manual Status"] == "Blocked":
-                action = "identify blocker owner and unblock path"
-            else:
-                action = "request a same-day status update"
-            summary.append(f"- {row['Team']} / {row['Owner']}: {action} for '{row['Commitment']}'.")
+    # 3. Shipped — short and sweet
+    done = df[df["Calculated Status"] == "Done"]
+    if not done.empty:
+        lines.append("SHIPPED")
+        for _, r in done.iterrows():
+            lines.append(f"  • {r['Commitment']} ({r['Owner']}, {r['Team']})")
+        lines.append("")
 
-    return "\n".join(summary)
+    # 4. On track — collapsed to a count, not a list. Founder doesn't need names.
+    on_track = df[df["Calculated Status"] == "On track"]
+    if not on_track.empty:
+        by_team = on_track.groupby("Team").size().to_dict()
+        breakdown = ", ".join(f"{t} {n}" for t, n in by_team.items())
+        lines.append(f"ON TRACK — {len(on_track)} commitments ({breakdown})")
+        lines.append("")
 
+    # 5. Stale — owners we haven't heard from
+    stale = df[(df["Days Since Update"] >= 7) & (df["Calculated Status"] != "Done")]
+    if not stale.empty:
+        lines.append("STALE (no update in 7+ days)")
+        for _, r in stale.iterrows():
+            lines.append(f"  • {r['Owner']} on '{r['Commitment']}' — last update {r['Days Since Update']}d ago")
+
+    return "\n".join(lines)
 
 # -----------------------------
-# Session State
+# Session
 # -----------------------------
 if "commitments" not in st.session_state:
-    st.session_state.commitments = SAMPLE_COMMITMENTS.copy()
+    st.session_state.commitments = [dict(r) for r in SAMPLE_COMMITMENTS]
+if "show_add" not in st.session_state:
+    st.session_state.show_add = False
 
 # -----------------------------
-# App Header
+# Header
 # -----------------------------
-st.title("⚡ LightWork Ops Pulse")
-st.caption("A lightweight operations orchestration agent for team commitments, deadline risk, and weekly founder updates.")
+st.title("⚡ Ops Pulse")
+st.caption("What's breaking this week, who needs chasing, and what to put in the founder's brief.")
 
+# -----------------------------
+# Sidebar nav
+# -----------------------------
 with st.sidebar:
-    st.header("Navigation")
     page = st.radio(
-        "Go to",
-        ["Dashboard", "Add Commitment", "Log Update", "Weekly Summary", "Export"],
+        "View",
+        ["This week", "Add commitment", "Log update", "Founder brief", "Export"],
         label_visibility="collapsed",
     )
     st.divider()
-    st.write("**Status logic**")
     st.caption(
-        "Completed if marked completed. Missed if deadline passed. At risk if blocked, low confidence, or deadline is close with no recent update."
+        "**How status is calculated**\n\n"
+        "🔴 **Missed** — deadline passed, not done.\n\n"
+        "🟠 **At risk** — blocked, low confidence, or due in ≤3d with no update in ≥5d.\n\n"
+        "🟢 **On track** — everything else open.\n\n"
+        "✅ **Done** — owner marked it done."
     )
 
-# -----------------------------
-# Dashboard
-# -----------------------------
-df = enrich_df(st.session_state.commitments)
+df = enrich(st.session_state.commitments)
 
-if page == "Dashboard":
-    st.subheader("Founder View")
-
+# =============================
+# THIS WEEK
+# =============================
+if page == "This week":
     if df.empty:
         st.info("No commitments yet. Add one from the sidebar.")
+        st.stop()
+
+    # Headline counts — only the two that matter get prominent treatment.
+    missed_n = int((df["Calculated Status"] == "Missed").sum())
+    risk_n = int((df["Calculated Status"] == "At risk").sum())
+    on_track_n = int((df["Calculated Status"] == "On track").sum())
+    done_n = int((df["Calculated Status"] == "Done").sum())
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("🔴 Missed", missed_n)
+    c2.metric("🟠 At risk", risk_n)
+    c3.metric("🟢 On track", on_track_n)
+    c4.metric("✅ Done", done_n)
+
+    st.divider()
+
+    # The lede
+    st.subheader("Chase today")
+    attention = df[df["Needs Attention"]].sort_values(
+        ["Calculated Status", "Days to Deadline"],
+        key=lambda s: s.map({"Missed": 0, "At risk": 1}).fillna(s) if s.name == "Calculated Status" else s,
+    )
+
+    if attention.empty:
+        st.success("Clean week. Nothing needs chasing today.")
     else:
-        col1, col2, col3, col4 = st.columns(4)
-        col1.metric("On track", int((df["Calculated Status"] == "On track").sum()))
-        col2.metric("At risk", int((df["Calculated Status"] == "At risk").sum()))
-        col3.metric("Missed", int((df["Calculated Status"] == "Missed").sum()))
-        col4.metric("Completed", int((df["Calculated Status"] == "Completed").sum()))
+        for _, row in attention.iterrows():
+            emoji = STATUS_EMOJI.get(row["Calculated Status"], "")
+            with st.container(border=True):
+                top = st.columns([5, 1])
+                top[0].markdown(
+                    f"**{emoji} {row['Commitment']}**  \n"
+                    f"{row['Owner']} · {row['Team']} · due "
+                    f"{row['Deadline'].strftime('%a %d %b')} · {row['Priority']}"
+                )
+                top[1].markdown(
+                    f"<div style='text-align:right; color:#b45309; font-weight:600;'>{row['Risk Reason']}</div>",
+                    unsafe_allow_html=True,
+                )
+                if row["Latest Update"]:
+                    st.caption(f"Last update ({row['Days Since Update']}d ago): {row['Latest Update']}")
+                with st.expander("Draft chase message"):
+                    st.code(chase_message(row), language=None)
 
-        st.divider()
-        st.subheader("Needs Attention Today")
-        attention = df[df["Needs Attention"]].sort_values("Days to Deadline")
-        if attention.empty:
-            st.success("No urgent risks flagged today.")
-        else:
-            for _, row in attention.iterrows():
-                with st.container(border=True):
-                    st.markdown(f"**{row['Team']} — {row['Commitment']}**")
-                    st.write(f"Owner: {row['Owner']} | Deadline: {row['Deadline'].strftime('%d %b %Y')} | Status: {row['Calculated Status']}")
-                    st.warning(row["Risk Reason"])
-                    with st.expander("Suggested follow-up message"):
-                        st.write(make_follow_up(row))
+    st.divider()
 
-        st.divider()
-        st.subheader("All Commitments")
-        display_cols = [
-            "Team",
-            "Owner",
-            "Commitment",
-            "Deadline",
-            "Priority",
-            "Manual Status",
-            "Confidence",
-            "Calculated Status",
-            "Risk Reason",
-            "Latest Update",
-        ]
-        st.dataframe(df[display_cols], use_container_width=True, hide_index=True)
+    # Full table — collapsed by default to keep the page scannable
+    with st.expander(f"All commitments ({len(df)})", expanded=False):
+        team_filter = st.multiselect("Filter by team", TEAMS, default=[])
+        status_filter = st.multiselect(
+            "Filter by status",
+            ["Missed", "At risk", "On track", "Done"],
+            default=[],
+        )
+        view = df.copy()
+        if team_filter:
+            view = view[view["Team"].isin(team_filter)]
+        if status_filter:
+            view = view[view["Calculated Status"].isin(status_filter)]
 
-# -----------------------------
-# Add Commitment
-# -----------------------------
-elif page == "Add Commitment":
-    st.subheader("Add a Team Commitment")
-    with st.form("add_commitment"):
-        col1, col2 = st.columns(2)
-        team = col1.selectbox("Team", TEAMS)
-        owner = col2.text_input("Owner", placeholder="e.g. Sarah")
-        commitment = st.text_input("Commitment", placeholder="e.g. Ship integration by 14 April")
-        col3, col4, col5 = st.columns(3)
-        deadline = col3.date_input("Deadline", value=date.today() + timedelta(days=7))
-        priority = col4.selectbox("Priority", ["High", "Medium", "Low"])
-        confidence = col5.selectbox("Confidence", CONFIDENCE_LEVELS, index=1)
-        manual_status = st.selectbox("Manual Status", MANUAL_STATUSES, index=1)
-        blocked = st.checkbox("Blocked?")
-        latest_update = st.text_area("Latest Update", placeholder="What is the latest known progress or blocker?")
-        submitted = st.form_submit_button("Add commitment")
+        display_cols = ["Calculated Status", "Priority", "Team", "Owner",
+                        "Commitment", "Deadline", "Days Since Update",
+                        "Confidence", "Latest Update"]
+        st.dataframe(
+            view[display_cols].rename(columns={"Calculated Status": "Status"}),
+            use_container_width=True,
+            hide_index=True,
+        )
 
-    if submitted:
-        if not owner or not commitment:
-            st.error("Please add at least an owner and commitment.")
-        else:
-            st.session_state.commitments.append(
-                {
-                    "Team": team,
-                    "Owner": owner,
-                    "Commitment": commitment,
-                    "Deadline": deadline,
-                    "Manual Status": manual_status,
-                    "Confidence": confidence,
-                    "Blocked": blocked,
+# =============================
+# ADD
+# =============================
+elif page == "Add commitment":
+    st.subheader("Add a commitment")
+    with st.form("add"):
+        c1, c2 = st.columns(2)
+        team = c1.selectbox("Team", TEAMS)
+        owner = c2.text_input("Owner", placeholder="First name is fine")
+
+        commitment = st.text_input(
+            "What did they commit to?",
+            placeholder="One sentence. Verb first. e.g. 'Ship integration beta'",
+        )
+
+        c3, c4, c5 = st.columns(3)
+        deadline = c3.date_input("Deadline", value=date.today() + timedelta(days=7))
+        priority = c4.selectbox("Priority", PRIORITIES, index=1)
+        confidence = c5.selectbox("Owner confidence", CONFIDENCE_LEVELS, index=1)
+
+        c6, c7 = st.columns([3, 1])
+        status = c6.selectbox("Status", STATUSES, index=1)
+        blocked = c7.checkbox("Blocked", value=False)
+
+        latest = st.text_area(
+            "Latest update",
+            placeholder="What did the owner last say? Leave blank if no update yet.",
+        )
+
+        submit = st.form_submit_button("Add", type="primary")
+        if submit:
+            if not owner or not commitment:
+                st.error("Need at least an owner and the commitment.")
+            else:
+                st.session_state.commitments.append({
+                    "Team": team, "Owner": owner.strip(),
+                    "Commitment": commitment.strip(),
+                    "Deadline": deadline, "Status": status,
+                    "Confidence": confidence, "Blocked": blocked,
                     "Last Update Date": date.today(),
-                    "Latest Update": latest_update or "No update provided yet.",
+                    "Latest Update": latest.strip() or "—",
                     "Priority": priority,
-                }
-            )
-            st.success("Commitment added. Check the Dashboard to see its calculated status.")
+                })
+                st.success(f"Added. Switch to **This week** to see where it lands.")
 
-# -----------------------------
-# Log Update
-# -----------------------------
-elif page == "Log Update":
-    st.subheader("Log an Update")
+# =============================
+# LOG UPDATE
+# =============================
+elif page == "Log update":
+    st.subheader("Log an update")
     if df.empty:
-        st.info("No commitments available to update.")
+        st.info("Nothing to update.")
     else:
-        options = [f"{i}: {row['Team']} — {row['Commitment']} ({row['Owner']})" for i, row in df.iterrows()]
-        selected = st.selectbox("Select commitment", options)
+        # Sort by what most needs an update
+        sort_df = df.sort_values(["Needs Attention", "Days Since Update"], ascending=[False, False])
+        options = [
+            f"{i}: {STATUS_EMOJI.get(row['Calculated Status'], '')} "
+            f"{row['Commitment']} ({row['Owner']}, last update {row['Days Since Update']}d ago)"
+            for i, row in sort_df.iterrows()
+        ]
+        selected = st.selectbox("Pick a commitment", options)
         idx = int(selected.split(":")[0])
         current = st.session_state.commitments[idx]
 
-        with st.form("log_update"):
-            col1, col2, col3 = st.columns(3)
-            manual_status = col1.selectbox("Manual Status", MANUAL_STATUSES, index=MANUAL_STATUSES.index(current["Manual Status"]))
-            confidence = col2.selectbox("Confidence", CONFIDENCE_LEVELS, index=CONFIDENCE_LEVELS.index(current["Confidence"]))
-            blocked = col3.checkbox("Blocked?", value=current["Blocked"])
-            latest_update = st.text_area("Update", value=current["Latest Update"])
-            submitted = st.form_submit_button("Save update")
+        with st.form("update"):
+            c1, c2, c3 = st.columns(3)
+            status = c1.selectbox("Status", STATUSES, index=STATUSES.index(current["Status"]))
+            confidence = c2.selectbox("Confidence", CONFIDENCE_LEVELS,
+                                       index=CONFIDENCE_LEVELS.index(current["Confidence"]))
+            blocked = c3.checkbox("Blocked", value=current["Blocked"])
 
-        if submitted:
-            st.session_state.commitments[idx]["Manual Status"] = manual_status
-            st.session_state.commitments[idx]["Confidence"] = confidence
-            st.session_state.commitments[idx]["Blocked"] = blocked
-            st.session_state.commitments[idx]["Latest Update"] = latest_update
-            st.session_state.commitments[idx]["Last Update Date"] = date.today()
-            st.success("Update logged.")
+            latest = st.text_area("What's the update?", value=current["Latest Update"])
+            submit = st.form_submit_button("Save", type="primary")
+            if submit:
+                st.session_state.commitments[idx].update({
+                    "Status": status,
+                    "Confidence": confidence,
+                    "Blocked": blocked,
+                    "Latest Update": latest.strip() or "—",
+                    "Last Update Date": date.today(),
+                })
+                st.success("Saved.")
 
-# -----------------------------
-# Weekly Summary
-# -----------------------------
-elif page == "Weekly Summary":
-    st.subheader("Weekly Summary Generator")
-    st.write("Generate a concise founder-ready weekly summary from current commitments.")
+# =============================
+# FOUNDER BRIEF
+# =============================
+elif page == "Founder brief":
+    st.subheader("Friday brief")
+    st.caption("Paste this into Slack or email. Opens with what needs the founder, ends with what's already moving.")
 
-    summary = generate_weekly_summary(df)
-    st.text_area("Generated summary", summary, height=360)
+    brief = weekly_brief(df)
+    st.code(brief, language=None)
 
-    st.download_button(
-        "Download summary as .txt",
-        data=summary,
-        file_name=f"lightwork_weekly_summary_{date.today().isoformat()}.txt",
+    c1, c2 = st.columns([1, 3])
+    c1.download_button(
+        "Download .txt",
+        data=brief,
+        file_name=f"ops_brief_{date.today().isoformat()}.txt",
         mime="text/plain",
     )
 
-    st.info(
-        "In a fuller version, this summary could be passed to ChatGPT or Claude to make the tone sharper, but the core risk logic remains deterministic and testable."
-    )
-
-# -----------------------------
-# Export
-# -----------------------------
+# =============================
+# EXPORT
+# =============================
 elif page == "Export":
-    st.subheader("Export Current Commitments")
+    st.subheader("Export")
     if df.empty:
-        st.info("No commitments to export.")
+        st.info("Nothing to export.")
     else:
-        export_df = df.copy()
-        csv = export_df.to_csv(index=False).encode("utf-8")
+        csv = df.to_csv(index=False).encode("utf-8")
         st.download_button(
-            "Download commitments CSV",
+            "Download CSV",
             data=csv,
-            file_name="lightwork_ops_pulse_commitments.csv",
+            file_name=f"ops_pulse_{date.today().isoformat()}.csv",
             mime="text/csv",
+            type="primary",
         )
-        st.dataframe(export_df, use_container_width=True, hide_index=True)
+        st.dataframe(df, use_container_width=True, hide_index=True)
