@@ -212,6 +212,7 @@ def polish_brief_with_ai(deterministic_brief: str) -> str:
     except ImportError:
         raise RuntimeError("anthropic package not installed. Run: pip install anthropic")
 
+    client = Anthropic(api_key=api_key)
     system_prompt = (
         "You are a Founder's Associate at an early stage startup, rewriting the weekly "
         "ops brief for the co-founders. You have been given a structured status report. "
@@ -242,6 +243,7 @@ def polish_brief_with_ai(deterministic_brief: str) -> str:
     # post-process: strip any em dashes the model slipped in
     polished = polished.replace("—", ",").replace("–", ",")
     return polished
+
 
 # session state
 if "commitments" not in st.session_state:
