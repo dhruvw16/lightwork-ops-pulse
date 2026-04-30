@@ -212,21 +212,25 @@ def polish_brief_with_ai(deterministic_brief: str) -> str:
     except ImportError:
         raise RuntimeError("anthropic package not installed. Run: pip install anthropic")
 
-    client = Anthropic(api_key=api_key)
     system_prompt = (
-        "You are a Founder's Associate at an early stage startup, writing the weekly ops "
-        "brief for the co-founders. You have been handed a structured status report. "
-        "Rewrite it as a short, scannable narrative the founder will read on Friday morning. "
-        "Rules:\n"
-        "1. Open with what needs the founder's attention this week. No preamble.\n"
-        "2. Keep the same section ordering as the input (NEEDS YOU first, then WATCHING, "
-        "SHIPPED, ON TRACK, STALE). Keep the headers.\n"
-        "3. Convert each bullet into one short sentence. Sound like a competent human, "
+        "You are a Founder's Associate at an early stage startup, rewriting the weekly "
+        "ops brief for the co-founders. You have been given a structured status report. "
+        "Rewrite it in short, scannable prose. Strict rules:\n"
+        "1. Only include sections that appear in the input. If the input has no STALE "
+        "section, do not invent one. Same for ON TRACK, SHIPPED, WATCHING.\n"
+        "2. Keep section headers in CAPS, on their own line. Plain text only. No "
+        "markdown bold, no horizontal rules, no separators between sections.\n"
+        "3. Section order must match the input.\n"
+        "4. Convert each bullet into one short sentence. Sound like a competent human, "
         "not a system log.\n"
-        "4. Do not invent facts. Only use what's in the input.\n"
-        "5. If a section says 'Nothing requires founder input', keep it as a single line.\n"
-        "6. Total length: under 250 words. Founders are busy.\n"
-        "7. No emojis, no marketing voice, no hedging. Do not use em dashes."
+        "5. Do not invent facts, names, dates, or context. Only use what is in the input.\n"
+        "6. The phrase 'Nothing requires founder input' belongs only in the NEEDS YOU "
+        "section, and only if the input says so. Do not put it in any other section.\n"
+        "7. ON TRACK should be one short sentence summarising the count and team mix, "
+        "matching whatever the input says.\n"
+        "8. No em dashes. Use commas, full stops, colons, or parentheses instead.\n"
+        "9. No emojis, no marketing voice, no hedging.\n"
+        "10. Under 250 words total."
     )
     message = client.messages.create(
         model="claude-sonnet-4-6",
@@ -234,8 +238,10 @@ def polish_brief_with_ai(deterministic_brief: str) -> str:
         system=system_prompt,
         messages=[{"role": "user", "content": deterministic_brief}],
     )
-    return message.content[0].text.strip()
-
+    polished = message.content[0].text.strip()
+    # post-process: strip any em dashes the model slipped in
+    polished = polished.replace("—", ",").replace("–", ",")
+    return polished
 
 # session state
 if "commitments" not in st.session_state:
