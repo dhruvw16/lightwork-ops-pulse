@@ -1,13 +1,11 @@
 import os
 import streamlit as st
 import pandas as pd
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 
 st.set_page_config(page_title="LightWork Ops Pulse", page_icon="⚡", layout="wide")
 
-# -----------------------------
-# Config
-# -----------------------------
+# config
 TEAMS = ["Engineering", "Product", "Commercial", "Operations", "Other"]
 CONFIDENCE_LEVELS = ["High", "Medium", "Low"]
 STATUSES = ["Not started", "In progress", "Done", "Blocked"]
@@ -20,6 +18,7 @@ STATUS_EMOJI = {
     "Done": "✅",
 }
 
+# sample data so the app is useful on first open
 SAMPLE_COMMITMENTS = [
     {
         "Team": "Engineering", "Owner": "Sarah",
@@ -27,7 +26,7 @@ SAMPLE_COMMITMENTS = [
         "Deadline": date.today() + timedelta(days=2),
         "Status": "In progress", "Confidence": "Medium", "Blocked": False,
         "Last Update Date": date.today() - timedelta(days=6),
-        "Latest Update": "Core API connection works; webhook reliability still flaky.",
+        "Latest Update": "Core API connection works. Webhook reliability still flaky.",
         "Priority": "P0",
     },
     {
@@ -41,11 +40,11 @@ SAMPLE_COMMITMENTS = [
     },
     {
         "Team": "Product", "Owner": "Maya",
-        "Commitment": "Release maintenance-notification redesign",
+        "Commitment": "Release maintenance notification redesign",
         "Deadline": date.today() - timedelta(days=1),
         "Status": "In progress", "Confidence": "Medium", "Blocked": False,
         "Last Update Date": date.today() - timedelta(days=3),
-        "Latest Update": "Design signed off; missed release window — stuck in QA.",
+        "Latest Update": "Design signed off. Missed release window, stuck in QA.",
         "Priority": "P1",
     },
     {
@@ -63,14 +62,12 @@ SAMPLE_COMMITMENTS = [
         "Deadline": date.today() + timedelta(days=12),
         "Status": "In progress", "Confidence": "High", "Blocked": False,
         "Last Update Date": date.today() - timedelta(days=2),
-        "Latest Update": "Retries + alerting live. Watching this week's numbers.",
+        "Latest Update": "Retries and alerting live. Watching this week's numbers.",
         "Priority": "P1",
     },
 ]
 
-# -----------------------------
-# Logic
-# -----------------------------
+
 def calc_status(row):
     today = date.today()
     days_to_deadline = (row["Deadline"] - today).days
@@ -84,6 +81,7 @@ def calc_status(row):
     if days_to_deadline <= 3 and days_since_update >= 5:
         return "At risk"
     return "On track"
+
 
 def risk_reason(row):
     today = date.today()
@@ -100,7 +98,8 @@ def risk_reason(row):
         return "Owner confidence: low"
     if days_to_deadline <= 3 and days_since_update >= 5:
         return f"Due in {days_to_deadline}d, no update in {days_since_update}d"
-    return "—"
+    return ""
+
 
 def needs_attention(row):
     today = date.today()
@@ -110,6 +109,7 @@ def needs_attention(row):
         calc_status(row) in ["At risk", "Missed"]
         or (0 <= days_to_deadline <= 3 and days_since_update >= 5)
     )
+
 
 def enrich(records):
     df = pd.DataFrame([dict(r) for r in records])
@@ -122,30 +122,33 @@ def enrich(records):
     df["Days Since Update"] = df["Last Update Date"].apply(lambda d: (date.today() - d).days)
     return df
 
+
 def chase_message(row):
-    """Short, founder's-associate Slack DM style — no system-log explanations."""
+    """Slack DM style. Short, direct, no system log explanations."""
     deadline = row["Deadline"].strftime("%a %d %b")
     if row["Calculated Status"] == "Missed":
-        return (f"Hi {row['Owner']} — '{row['Commitment']}' was due {deadline}. "
-                f"Can you share a revised date and what we need to unblock it? Founder syncs Friday.")
+        return (f"Hi {row['Owner']}, '{row['Commitment']}' was due {deadline}. "
+                f"Can you share a revised date and what we need to unblock it? "
+                f"Founder syncs Friday.")
     if row["Blocked"] or row["Status"] == "Blocked":
-        return (f"Hi {row['Owner']} — '{row['Commitment']}' is flagged blocked. "
+        return (f"Hi {row['Owner']}, '{row['Commitment']}' is flagged blocked. "
                 f"What's the blocker, and who needs to act? Happy to help escalate.")
     if row["Confidence"] == "Low":
-        return (f"Hi {row['Owner']} — you've marked '{row['Commitment']}' as low confidence. "
+        return (f"Hi {row['Owner']}, you've marked '{row['Commitment']}' as low confidence. "
                 f"What would move it back to medium? Anything worth flagging to the founder?")
-    return (f"Hi {row['Owner']} — quick check on '{row['Commitment']}', due {deadline}. "
+    return (f"Hi {row['Owner']}, quick check on '{row['Commitment']}', due {deadline}. "
             f"Any update? Haven't heard since {row['Last Update Date'].strftime('%a %d %b')}.")
 
+
 def weekly_brief(df):
-    """Founder-ready brief. Opens with asks, not inventory."""
+    """Founder ready brief. Opens with asks, not inventory."""
     if df.empty:
         return "No commitments tracked."
 
     today = date.today()
     week_end = today + timedelta(days=(4 - today.weekday()) % 7)
     lines = []
-    lines.append(f"WEEKLY OPS BRIEF — week ending {week_end.strftime('%a %d %b %Y')}")
+    lines.append(f"WEEKLY OPS BRIEF, week ending {week_end.strftime('%a %d %b %Y')}")
     lines.append("")
 
     missed = df[df["Calculated Status"] == "Missed"].sort_values("Days to Deadline")
@@ -158,55 +161,51 @@ def weekly_brief(df):
         lines.append("  Nothing requires founder input this week.")
     else:
         for _, r in asks.iterrows():
-            lines.append(f"  • {r['Commitment']} ({r['Owner']}, {r['Team']}) — {r['Risk Reason']}")
+            lines.append(f"  - {r['Commitment']} ({r['Owner']}, {r['Team']}): {r['Risk Reason']}")
     lines.append("")
 
     soft_risk = df[(df["Calculated Status"] == "At risk") & (~df.index.isin(asks.index))]
     if not soft_risk.empty:
         lines.append("WATCHING")
         for _, r in soft_risk.iterrows():
-            lines.append(f"  • {r['Commitment']} ({r['Owner']}) — {r['Risk Reason']}")
+            lines.append(f"  - {r['Commitment']} ({r['Owner']}): {r['Risk Reason']}")
         lines.append("")
 
     done = df[df["Calculated Status"] == "Done"]
     if not done.empty:
         lines.append("SHIPPED")
         for _, r in done.iterrows():
-            lines.append(f"  • {r['Commitment']} ({r['Owner']}, {r['Team']})")
+            lines.append(f"  - {r['Commitment']} ({r['Owner']}, {r['Team']})")
         lines.append("")
 
     on_track = df[df["Calculated Status"] == "On track"]
     if not on_track.empty:
         by_team = on_track.groupby("Team").size().to_dict()
         breakdown = ", ".join(f"{t} {n}" for t, n in by_team.items())
-        lines.append(f"ON TRACK — {len(on_track)} commitments ({breakdown})")
+        lines.append(f"ON TRACK: {len(on_track)} commitments ({breakdown})")
         lines.append("")
 
     stale = df[(df["Days Since Update"] >= 7) & (df["Calculated Status"] != "Done")]
     if not stale.empty:
         lines.append("STALE (no update in 7+ days)")
         for _, r in stale.iterrows():
-            lines.append(f"  • {r['Owner']} on '{r['Commitment']}' — last update {r['Days Since Update']}d ago")
+            lines.append(f"  - {r['Owner']} on '{r['Commitment']}', last update {r['Days Since Update']}d ago")
 
     return "\n".join(lines)
 
-# -----------------------------
-# AI polish (optional)
-# -----------------------------
+
+# optional AI polish layer
 def get_anthropic_key():
-    """Look up the API key from Streamlit secrets first, then env var."""
     try:
         return st.secrets["ANTHROPIC_API_KEY"]
     except (KeyError, FileNotFoundError):
         return os.environ.get("ANTHROPIC_API_KEY")
 
+
 def polish_brief_with_ai(deterministic_brief: str) -> str:
-    """Rewrite the structured brief in natural prose. Deterministic version stays source of truth."""
     api_key = get_anthropic_key()
     if not api_key:
-        raise RuntimeError(
-            "No ANTHROPIC_API_KEY found. Set it in Streamlit secrets or as an environment variable."
-        )
+        raise RuntimeError("No ANTHROPIC_API_KEY found.")
 
     try:
         from anthropic import Anthropic
@@ -215,45 +214,42 @@ def polish_brief_with_ai(deterministic_brief: str) -> str:
 
     client = Anthropic(api_key=api_key)
     system_prompt = (
-        "You are a Founder's Associate at an early-stage startup, writing the weekly ops "
+        "You are a Founder's Associate at an early stage startup, writing the weekly ops "
         "brief for the co-founders. You have been handed a structured status report. "
-        "Rewrite it as a short, scannable narrative the founder will read over coffee on "
-        "Friday morning. Rules:\n"
-        "- Open with what needs the founder's attention this week. No preamble.\n"
-        "- Keep the same section ordering as the input (NEEDS YOU first, then WATCHING, "
+        "Rewrite it as a short, scannable narrative the founder will read on Friday morning. "
+        "Rules:\n"
+        "1. Open with what needs the founder's attention this week. No preamble.\n"
+        "2. Keep the same section ordering as the input (NEEDS YOU first, then WATCHING, "
         "SHIPPED, ON TRACK, STALE). Keep the headers.\n"
-        "- Convert each bullet into one short sentence. Sound like a competent human, "
+        "3. Convert each bullet into one short sentence. Sound like a competent human, "
         "not a system log.\n"
-        "- Do not invent facts. Only use what's in the input.\n"
-        "- If a section says 'Nothing requires founder input', keep it as a single line.\n"
-        "- Total length: under 250 words. Founders are busy.\n"
-        "- No emojis, no marketing voice, no hedging."
+        "4. Do not invent facts. Only use what's in the input.\n"
+        "5. If a section says 'Nothing requires founder input', keep it as a single line.\n"
+        "6. Total length: under 250 words. Founders are busy.\n"
+        "7. No emojis, no marketing voice, no hedging. Do not use em dashes."
     )
     message = client.messages.create(
-        model="claude-sonnet-4-5",
+        model="claude-sonnet-4-6",
         max_tokens=800,
         system=system_prompt,
         messages=[{"role": "user", "content": deterministic_brief}],
     )
     return message.content[0].text.strip()
 
-# -----------------------------
-# Session
-# -----------------------------
+
+# session state
 if "commitments" not in st.session_state:
     st.session_state.commitments = [dict(r) for r in SAMPLE_COMMITMENTS]
 if "polished_brief" not in st.session_state:
     st.session_state.polished_brief = None
 
-# -----------------------------
-# Header
-# -----------------------------
+
+# header
 st.title("⚡ LightWork Ops Pulse")
 st.caption("What's breaking this week, who needs chasing, and what to put in the founder's brief.")
 
-# -----------------------------
-# Sidebar nav
-# -----------------------------
+
+# sidebar
 with st.sidebar:
     page = st.radio(
         "View",
@@ -263,17 +259,17 @@ with st.sidebar:
     st.divider()
     st.caption(
         "**How status is calculated**\n\n"
-        "🔴 **Missed** — deadline passed, not done.\n\n"
-        "🟠 **At risk** — blocked, low confidence, or due in ≤3d with no update in ≥5d.\n\n"
-        "🟢 **On track** — everything else open.\n\n"
-        "✅ **Done** — owner marked it done."
+        "🔴 **Missed**: deadline passed, not done.\n\n"
+        "🟠 **At risk**: blocked, low confidence, or due in 3 days or less with no "
+        "update in 5+ days.\n\n"
+        "🟢 **On track**: everything else open.\n\n"
+        "✅ **Done**: owner marked it done."
     )
 
 df = enrich(st.session_state.commitments)
 
-# =============================
-# THIS WEEK
-# =============================
+
+# this week
 if page == "This week":
     if df.empty:
         st.info("No commitments yet. Add one from the sidebar.")
@@ -310,24 +306,28 @@ if page == "This week":
                     f"{row['Deadline'].strftime('%a %d %b')} · {row['Priority']}"
                 )
                 top[1].markdown(
-                    f"<div style='text-align:right; color:#b45309; font-weight:600;'>{row['Risk Reason']}</div>",
+                    f"<div style='text-align:right; color:#b45309; font-weight:600;'>"
+                    f"{row['Risk Reason']}</div>",
                     unsafe_allow_html=True,
                 )
                 if row["Latest Update"]:
-                    st.caption(f"Last update ({row['Days Since Update']}d ago): {row['Latest Update']}")
+                    st.caption(
+                        f"Last update ({row['Days Since Update']}d ago): "
+                        f"{row['Latest Update']}"
+                    )
                 with st.expander("Draft chase message"):
                     st.code(chase_message(row), language=None)
 
-    # Stale panel — explicit so the "no update logged" rule is visible
+    # silent panel
     stale = df[(df["Days Since Update"] >= 7) & (df["Calculated Status"] != "Done")]
     if not stale.empty:
         st.divider()
-        st.subheader("Silent — no update in 7+ days")
+        st.subheader("Silent: no update in 7+ days")
         st.caption("Even if not at risk on paper, no news is its own signal.")
         for _, row in stale.iterrows():
             with st.container(border=True):
                 st.markdown(
-                    f"**{row['Commitment']}** — {row['Owner']} ({row['Team']})  \n"
+                    f"**{row['Commitment']}**: {row['Owner']} ({row['Team']})  \n"
                     f"Last update {row['Days Since Update']} days ago: _{row['Latest Update']}_"
                 )
 
@@ -354,9 +354,8 @@ if page == "This week":
             hide_index=True,
         )
 
-# =============================
-# ADD
-# =============================
+
+# add commitment
 elif page == "Add commitment":
     st.subheader("Add a commitment")
     with st.form("add"):
@@ -366,7 +365,7 @@ elif page == "Add commitment":
 
         commitment = st.text_input(
             "What did they commit to?",
-            placeholder="One sentence. Verb first. e.g. 'Ship integration beta'",
+            placeholder="One sentence, verb first. e.g. 'Ship integration beta'",
         )
 
         c3, c4, c5 = st.columns(3)
@@ -394,20 +393,22 @@ elif page == "Add commitment":
                     "Deadline": deadline, "Status": status,
                     "Confidence": confidence, "Blocked": blocked,
                     "Last Update Date": date.today(),
-                    "Latest Update": latest.strip() or "—",
+                    "Latest Update": latest.strip() or "",
                     "Priority": priority,
                 })
                 st.success("Added. Switch to **This week** to see where it lands.")
 
-# =============================
-# LOG UPDATE
-# =============================
+
+# log update
 elif page == "Log update":
     st.subheader("Log an update")
     if df.empty:
         st.info("Nothing to update.")
     else:
-        sort_df = df.sort_values(["Needs Attention", "Days Since Update"], ascending=[False, False])
+        sort_df = df.sort_values(
+            ["Needs Attention", "Days Since Update"],
+            ascending=[False, False],
+        )
         options = [
             f"{i}: {STATUS_EMOJI.get(row['Calculated Status'], '')} "
             f"{row['Commitment']} ({row['Owner']}, last update {row['Days Since Update']}d ago)"
@@ -420,8 +421,10 @@ elif page == "Log update":
         with st.form("update"):
             c1, c2, c3 = st.columns(3)
             status = c1.selectbox("Status", STATUSES, index=STATUSES.index(current["Status"]))
-            confidence = c2.selectbox("Confidence", CONFIDENCE_LEVELS,
-                                       index=CONFIDENCE_LEVELS.index(current["Confidence"]))
+            confidence = c2.selectbox(
+                "Confidence", CONFIDENCE_LEVELS,
+                index=CONFIDENCE_LEVELS.index(current["Confidence"]),
+            )
             blocked = c3.checkbox("Blocked", value=current["Blocked"])
 
             latest = st.text_area("What's the update?", value=current["Latest Update"])
@@ -431,20 +434,16 @@ elif page == "Log update":
                     "Status": status,
                     "Confidence": confidence,
                     "Blocked": blocked,
-                    "Latest Update": latest.strip() or "—",
+                    "Latest Update": latest.strip() or "",
                     "Last Update Date": date.today(),
                 })
                 st.success("Saved.")
 
-# =============================
-# FRIDAY BRIEF
-# =============================
+
+# friday brief
 elif page == "Friday brief":
     st.subheader("Friday brief")
-    st.caption(
-        "Deterministic structure — generated from the rules above, not an LLM. "
-        "Optional AI polish below for tone."
-    )
+    st.caption("The summary to send the founder on Friday.")
 
     brief = weekly_brief(df)
     st.code(brief, language=None)
@@ -459,23 +458,20 @@ elif page == "Friday brief":
     st.divider()
 
     st.markdown("**Polish with AI** _(optional)_")
-    st.caption(
-        "Rewrites the brief above in natural prose using Claude. The deterministic "
-        "version stays the source of truth — this is a tone layer, not a logic layer."
-    )
+    st.caption("Rewrites the brief above in plain English. Same facts, friendlier wording.")
 
     if not get_anthropic_key():
         st.info(
-            "To enable: add `ANTHROPIC_API_KEY` to Streamlit secrets (or set it as an "
-            "environment variable). The deterministic brief above works without it."
+            "To enable, add ANTHROPIC_API_KEY to Streamlit secrets or set it as an "
+            "environment variable. The brief above works without it."
         )
     else:
         if st.button("Polish brief"):
-            with st.spinner("Asking Claude to rewrite…"):
+            with st.spinner("Rewriting..."):
                 try:
                     st.session_state.polished_brief = polish_brief_with_ai(brief)
                 except Exception as e:
-                    st.error(f"AI polish failed: {e}. Use the deterministic brief above.")
+                    st.error(f"AI polish failed: {e}. Use the brief above.")
 
     if st.session_state.polished_brief:
         st.markdown("**Polished version**")
@@ -488,9 +484,8 @@ elif page == "Friday brief":
             key="dl_polished",
         )
 
-# =============================
-# EXPORT
-# =============================
+
+# export
 elif page == "Export":
     st.subheader("Export")
     if df.empty:
