@@ -1,8 +1,9 @@
+import os
 import streamlit as st
 import pandas as pd
 from datetime import date, datetime, timedelta
 
-st.set_page_config(page_title="Ops Pulse", page_icon="⚡", layout="wide")
+st.set_page_config(page_title="LightWork Ops Pulse", page_icon="⚡", layout="wide")
 
 # -----------------------------
 # Config
@@ -142,12 +143,11 @@ def weekly_brief(df):
         return "No commitments tracked."
 
     today = date.today()
-    week_end = today + timedelta(days=(4 - today.weekday()) % 7)  # this Friday
+    week_end = today + timedelta(days=(4 - today.weekday()) % 7)
     lines = []
     lines.append(f"WEEKLY OPS BRIEF — week ending {week_end.strftime('%a %d %b %Y')}")
     lines.append("")
 
-    # 1. Decisions / asks for the founder — the lede
     missed = df[df["Calculated Status"] == "Missed"].sort_values("Days to Deadline")
     blocked = df[(df["Calculated Status"] == "At risk") &
                  ((df["Blocked"]) | (df["Status"] == "Blocked"))]
@@ -161,7 +161,6 @@ def weekly_brief(df):
             lines.append(f"  • {r['Commitment']} ({r['Owner']}, {r['Team']}) — {r['Risk Reason']}")
     lines.append("")
 
-    # 2. At risk (not blocked, not missed) — informational
     soft_risk = df[(df["Calculated Status"] == "At risk") & (~df.index.isin(asks.index))]
     if not soft_risk.empty:
         lines.append("WATCHING")
@@ -169,7 +168,6 @@ def weekly_brief(df):
             lines.append(f"  • {r['Commitment']} ({r['Owner']}) — {r['Risk Reason']}")
         lines.append("")
 
-    # 3. Shipped — short and sweet
     done = df[df["Calculated Status"] == "Done"]
     if not done.empty:
         lines.append("SHIPPED")
@@ -177,7 +175,6 @@ def weekly_brief(df):
             lines.append(f"  • {r['Commitment']} ({r['Owner']}, {r['Team']})")
         lines.append("")
 
-    # 4. On track — collapsed to a count, not a list. Founder doesn't need names.
     on_track = df[df["Calculated Status"] == "On track"]
     if not on_track.empty:
         by_team = on_track.groupby("Team").size().to_dict()
@@ -185,7 +182,6 @@ def weekly_brief(df):
         lines.append(f"ON TRACK — {len(on_track)} commitments ({breakdown})")
         lines.append("")
 
-    # 5. Stale — owners we haven't heard from
     stale = df[(df["Days Since Update"] >= 7) & (df["Calculated Status"] != "Done")]
     if not stale.empty:
         lines.append("STALE (no update in 7+ days)")
@@ -195,17 +191,64 @@ def weekly_brief(df):
     return "\n".join(lines)
 
 # -----------------------------
+# AI polish (optional)
+# -----------------------------
+def get_anthropic_key():
+    """Look up the API key from Streamlit secrets first, then env var."""
+    try:
+        return st.secrets["ANTHROPIC_API_KEY"]
+    except (KeyError, FileNotFoundError):
+        return os.environ.get("ANTHROPIC_API_KEY")
+
+def polish_brief_with_ai(deterministic_brief: str) -> str:
+    """Rewrite the structured brief in natural prose. Deterministic version stays source of truth."""
+    api_key = get_anthropic_key()
+    if not api_key:
+        raise RuntimeError(
+            "No ANTHROPIC_API_KEY found. Set it in Streamlit secrets or as an environment variable."
+        )
+
+    try:
+        from anthropic import Anthropic
+    except ImportError:
+        raise RuntimeError("anthropic package not installed. Run: pip install anthropic")
+
+    client = Anthropic(api_key=api_key)
+    system_prompt = (
+        "You are a Founder's Associate at an early-stage startup, writing the weekly ops "
+        "brief for the co-founders. You have been handed a structured status report. "
+        "Rewrite it as a short, scannable narrative the founder will read over coffee on "
+        "Friday morning. Rules:\n"
+        "- Open with what needs the founder's attention this week. No preamble.\n"
+        "- Keep the same section ordering as the input (NEEDS YOU first, then WATCHING, "
+        "SHIPPED, ON TRACK, STALE). Keep the headers.\n"
+        "- Convert each bullet into one short sentence. Sound like a competent human, "
+        "not a system log.\n"
+        "- Do not invent facts. Only use what's in the input.\n"
+        "- If a section says 'Nothing requires founder input', keep it as a single line.\n"
+        "- Total length: under 250 words. Founders are busy.\n"
+        "- No emojis, no marketing voice, no hedging."
+    )
+    message = client.messages.create(
+        model="claude-sonnet-4-5",
+        max_tokens=800,
+        system=system_prompt,
+        messages=[{"role": "user", "content": deterministic_brief}],
+    )
+    return message.content[0].text.strip()
+
+# -----------------------------
 # Session
 # -----------------------------
 if "commitments" not in st.session_state:
     st.session_state.commitments = [dict(r) for r in SAMPLE_COMMITMENTS]
-if "show_add" not in st.session_state:
-    st.session_state.show_add = False
+if "polished_brief" not in st.session_state:
+    st.session_state.polished_brief = None
 
 # -----------------------------
 # Header
 # -----------------------------
-st.title("⚡ Ops Pulse")
+st.title("⚡ LightWork Ops Pulse")
 st.caption("What's breaking this week, who needs chasing, and what to put in the founder's brief.")
 
 # -----------------------------
@@ -214,7 +257,7 @@ st.caption("What's breaking this week, who needs chasing, and what to put in the
 with st.sidebar:
     page = st.radio(
         "View",
-        ["This week", "Add commitment", "Log update", "Founder brief", "Export"],
+        ["This week", "Add commitment", "Log update", "Friday brief", "Export"],
         label_visibility="collapsed",
     )
     st.divider()
@@ -236,7 +279,6 @@ if page == "This week":
         st.info("No commitments yet. Add one from the sidebar.")
         st.stop()
 
-    # Headline counts — only the two that matter get prominent treatment.
     missed_n = int((df["Calculated Status"] == "Missed").sum())
     risk_n = int((df["Calculated Status"] == "At risk").sum())
     on_track_n = int((df["Calculated Status"] == "On track").sum())
@@ -250,13 +292,11 @@ if page == "This week":
 
     st.divider()
 
-    # The lede
     st.subheader("Chase today")
     attention = df[df["Needs Attention"]].sort_values(
         ["Calculated Status", "Days to Deadline"],
         key=lambda s: s.map({"Missed": 0, "At risk": 1}).fillna(s) if s.name == "Calculated Status" else s,
     )
-
     if attention.empty:
         st.success("Clean week. Nothing needs chasing today.")
     else:
@@ -278,9 +318,20 @@ if page == "This week":
                 with st.expander("Draft chase message"):
                     st.code(chase_message(row), language=None)
 
-    st.divider()
+    # Stale panel — explicit so the "no update logged" rule is visible
+    stale = df[(df["Days Since Update"] >= 7) & (df["Calculated Status"] != "Done")]
+    if not stale.empty:
+        st.divider()
+        st.subheader("Silent — no update in 7+ days")
+        st.caption("Even if not at risk on paper, no news is its own signal.")
+        for _, row in stale.iterrows():
+            with st.container(border=True):
+                st.markdown(
+                    f"**{row['Commitment']}** — {row['Owner']} ({row['Team']})  \n"
+                    f"Last update {row['Days Since Update']} days ago: _{row['Latest Update']}_"
+                )
 
-    # Full table — collapsed by default to keep the page scannable
+    st.divider()
     with st.expander(f"All commitments ({len(df)})", expanded=False):
         team_filter = st.multiselect("Filter by team", TEAMS, default=[])
         status_filter = st.multiselect(
@@ -346,7 +397,7 @@ elif page == "Add commitment":
                     "Latest Update": latest.strip() or "—",
                     "Priority": priority,
                 })
-                st.success(f"Added. Switch to **This week** to see where it lands.")
+                st.success("Added. Switch to **This week** to see where it lands.")
 
 # =============================
 # LOG UPDATE
@@ -356,7 +407,6 @@ elif page == "Log update":
     if df.empty:
         st.info("Nothing to update.")
     else:
-        # Sort by what most needs an update
         sort_df = df.sort_values(["Needs Attention", "Days Since Update"], ascending=[False, False])
         options = [
             f"{i}: {STATUS_EMOJI.get(row['Calculated Status'], '')} "
@@ -387,22 +437,56 @@ elif page == "Log update":
                 st.success("Saved.")
 
 # =============================
-# FOUNDER BRIEF
+# FRIDAY BRIEF
 # =============================
-elif page == "Founder brief":
+elif page == "Friday brief":
     st.subheader("Friday brief")
-    st.caption("Paste this into Slack or email. Opens with what needs the founder, ends with what's already moving.")
+    st.caption(
+        "Deterministic structure — generated from the rules above, not an LLM. "
+        "Optional AI polish below for tone."
+    )
 
     brief = weekly_brief(df)
     st.code(brief, language=None)
 
-    c1, c2 = st.columns([1, 3])
-    c1.download_button(
+    st.download_button(
         "Download .txt",
         data=brief,
-        file_name=f"ops_brief_{date.today().isoformat()}.txt",
+        file_name=f"lightwork_brief_{date.today().isoformat()}.txt",
         mime="text/plain",
     )
+
+    st.divider()
+
+    st.markdown("**Polish with AI** _(optional)_")
+    st.caption(
+        "Rewrites the brief above in natural prose using Claude. The deterministic "
+        "version stays the source of truth — this is a tone layer, not a logic layer."
+    )
+
+    if not get_anthropic_key():
+        st.info(
+            "To enable: add `ANTHROPIC_API_KEY` to Streamlit secrets (or set it as an "
+            "environment variable). The deterministic brief above works without it."
+        )
+    else:
+        if st.button("Polish brief"):
+            with st.spinner("Asking Claude to rewrite…"):
+                try:
+                    st.session_state.polished_brief = polish_brief_with_ai(brief)
+                except Exception as e:
+                    st.error(f"AI polish failed: {e}. Use the deterministic brief above.")
+
+    if st.session_state.polished_brief:
+        st.markdown("**Polished version**")
+        st.code(st.session_state.polished_brief, language=None)
+        st.download_button(
+            "Download polished .txt",
+            data=st.session_state.polished_brief,
+            file_name=f"lightwork_brief_polished_{date.today().isoformat()}.txt",
+            mime="text/plain",
+            key="dl_polished",
+        )
 
 # =============================
 # EXPORT
@@ -416,7 +500,7 @@ elif page == "Export":
         st.download_button(
             "Download CSV",
             data=csv,
-            file_name=f"ops_pulse_{date.today().isoformat()}.csv",
+            file_name=f"lightwork_ops_pulse_{date.today().isoformat()}.csv",
             mime="text/csv",
             type="primary",
         )
